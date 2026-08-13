@@ -1,0 +1,4 @@
+implementation,width,height,iterations,mean_ms,p50_ms,p95_ms,min_ms,max_ms,max_error
+cpu,1920,1080,30,2.86055,2.55137,4.27226,2.34052,6.4507,0
+cuda_kernel,1920,1080,30,0.20057,0.19648,0.23008,0.184512,0.232288,0
+cuda_end_to_end,1920,1080,30,4.75116,4.59748,6.88342,3.27028,8.29422,0
