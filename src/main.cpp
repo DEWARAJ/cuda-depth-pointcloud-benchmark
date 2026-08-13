@@ -152,29 +152,36 @@ void write_csv(const Stats& cpu,
                const Stats& end_to_end,
                const Stats& pinned_kernel,
                const Stats& pinned_end_to_end,
+               const Stats& voxel_gpu,
+               const Stats& voxel_end_to_end,
                const Options& options,
-               const double max_error) {
+               const double max_error,
+               const int voxel_output_count) {
   std::filesystem::create_directories("results");
   std::ofstream output("results/latest.csv");
-  output << "implementation,width,height,iterations,mean_ms,p50_ms,p95_ms,min_ms,max_ms,max_error\n";
-  const auto row = [&](const std::string_view name, const Stats& stats) {
+  output << "implementation,width,height,iterations,mean_ms,p50_ms,p95_ms,"
+            "min_ms,max_ms,max_error,output_count\n";
+  const auto row = [&](const std::string_view name, const Stats& stats,
+                       const int output_count = 0) {
     output << name << ',' << options.width << ',' << options.height << ','
            << options.measured_iterations << ',' << stats.mean << ',' << stats.p50 << ','
            << stats.p95 << ',' << stats.minimum << ',' << stats.maximum << ','
-           << max_error << '\n';
+           << max_error << ',' << output_count << '\n';
   };
   row("cpu", cpu);
   row("cuda_kernel", kernel);
   row("cuda_end_to_end", end_to_end);
   row("cuda_pinned_kernel", pinned_kernel);
   row("cuda_pinned_end_to_end", pinned_end_to_end);
+  row("cuda_voxel_gpu", voxel_gpu, voxel_output_count);
+  row("cuda_voxel_end_to_end", voxel_end_to_end, voxel_output_count);
 }
 
 void print_row(const std::string_view name,
                const Stats& stats,
                const std::size_t point_count) {
   const double throughput = static_cast<double>(point_count) / (stats.p50 * 1000.0);
-  std::cout << std::left << std::setw(18) << name << std::right << std::setw(11)
+  std::cout << std::left << std::setw(24) << name << std::right << std::setw(11)
             << stats.mean << std::setw(11) << stats.p50 << std::setw(11) << stats.p95
             << std::setw(15) << throughput << '\n';
 }
@@ -193,6 +200,9 @@ int main(int argc, char** argv) {
         (static_cast<float>(options.height) - 1.0F) * 0.5F,
         options.width,
         options.height,
+    };
+    const pointcloud::VoxelGridConfig voxel_config{
+        -2.0F, -1.5F, 0.5F, 0.05F, 80, 60, 70,
     };
 
     const std::vector<float> depth = make_depth_image(options.width, options.height);
@@ -217,14 +227,28 @@ int main(int argc, char** argv) {
           depth, intrinsics, pinned_cuda_points, options.warmup_iterations,
           options.measured_iterations);
     }
+    pointcloud::VoxelPipelineTimings voxel_samples;
+    {
+      const NvtxRange range("cuda_device_resident_voxel_pipeline");
+      voxel_samples = pointcloud::benchmark_depth_voxel_cuda(
+          depth, intrinsics, voxel_config, options.warmup_iterations,
+          options.measured_iterations);
+    }
 
     const double error = std::max(maximum_error(cpu_points, cuda_points),
                                   maximum_error(cpu_points, pinned_cuda_points));
+    const std::size_t cpu_voxel_count =
+        pointcloud::count_occupied_voxels_cpu(cpu_points, voxel_config);
     constexpr double tolerance = 1.0e-5;
     if (error > tolerance) {
       std::cerr << "Correctness check failed: maximum error " << error
                 << " exceeds tolerance " << tolerance << '\n';
       return 2;
+    }
+    if (voxel_samples.output_count != static_cast<int>(cpu_voxel_count)) {
+      std::cerr << "Voxel correctness check failed: CPU count " << cpu_voxel_count
+                << " differs from GPU count " << voxel_samples.output_count << '\n';
+      return 3;
     }
 
     const Stats cpu_stats = summarize(cpu_samples);
@@ -233,9 +257,12 @@ int main(int argc, char** argv) {
     const Stats pinned_kernel_stats = summarize(pinned_cuda_samples.kernel_ms);
     const Stats pinned_end_to_end_stats =
         summarize(pinned_cuda_samples.end_to_end_ms);
+    const Stats voxel_gpu_stats = summarize(voxel_samples.gpu_ms);
+    const Stats voxel_end_to_end_stats = summarize(voxel_samples.end_to_end_ms);
 
     if (options.verify_only) {
-      std::cout << "CPU/CUDA correctness: PASS (maximum error " << error << ")\n";
+      std::cout << "CPU/CUDA correctness: PASS (maximum error " << error
+                << ", occupied voxels " << cpu_voxel_count << ")\n";
       return 0;
     }
 
@@ -244,7 +271,7 @@ int main(int argc, char** argv) {
               << "Frame: " << options.width << 'x' << options.height << " ("
               << point_count << " points)\n"
               << "Measured iterations: " << options.measured_iterations << "\n\n"
-              << std::left << std::setw(18) << "Implementation" << std::right
+              << std::left << std::setw(24) << "Implementation" << std::right
               << std::setw(11) << "Mean ms" << std::setw(11) << "P50 ms"
               << std::setw(11) << "P95 ms" << std::setw(15) << "Mpoints/s" << '\n';
     print_row("CPU", cpu_stats, point_count);
@@ -252,17 +279,25 @@ int main(int argc, char** argv) {
     print_row("CUDA end-to-end", end_to_end_stats, point_count);
     print_row("Pinned kernel", pinned_kernel_stats, point_count);
     print_row("Pinned end-to-end", pinned_end_to_end_stats, point_count);
+    print_row("Voxel pipeline GPU", voxel_gpu_stats, point_count);
+    print_row("Voxel pipeline end-to-end", voxel_end_to_end_stats, point_count);
     std::cout << "\nMaximum CPU/CUDA error: " << error << '\n'
+              << "Occupied voxels (CPU/GPU): " << cpu_voxel_count << '/'
+              << voxel_samples.output_count << '\n'
               << "Kernel speedup at p50: " << cpu_stats.p50 / kernel_stats.p50 << "x\n"
               << "End-to-end speedup at p50: "
               << cpu_stats.p50 / end_to_end_stats.p50 << "x\n"
               << "Pinned transfer improvement at p50: "
               << end_to_end_stats.p50 / pinned_end_to_end_stats.p50 << "x\n"
               << "Pinned end-to-end speedup vs CPU at p50: "
-              << cpu_stats.p50 / pinned_end_to_end_stats.p50 << "x\n";
+              << cpu_stats.p50 / pinned_end_to_end_stats.p50 << "x\n"
+              << "Device-resident voxel pipeline vs full point-cloud readback: "
+              << pinned_end_to_end_stats.p50 / voxel_end_to_end_stats.p50
+              << "x\n";
 
     write_csv(cpu_stats, kernel_stats, end_to_end_stats, pinned_kernel_stats,
-              pinned_end_to_end_stats, options, error);
+              pinned_end_to_end_stats, voxel_gpu_stats, voxel_end_to_end_stats,
+              options, error, voxel_samples.output_count);
     std::cout << "Results written to results/latest.csv\n";
     return 0;
   } catch (const std::exception& error) {

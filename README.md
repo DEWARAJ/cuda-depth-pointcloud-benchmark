@@ -2,16 +2,22 @@
 
 A reproducible modern C++20 application with a portable C++17 CUDA translation
 unit that converts a synthetic depth image into an organized XYZ point cloud.
-It compares a CPU reference implementation with a custom CUDA kernel, verifies
-numerical agreement, and reports mean, p50, and p95 latency.
+It compares a CPU reference implementation with custom CUDA kernels, verifies
+numerical agreement, and reports mean, p50, and p95 latency. The second-stage
+pipeline projects and voxel-compacts the cloud entirely on the GPU, returning
+only the compacted count instead of a 24.9 MB organized cloud.
 
 ## Why this project exists
 
-This repository is an initial evidence artifact for robotics-perception roles
-that require CUDA and modern C++. It demonstrates a custom kernel, explicit GPU
-memory management, RAII, CMake, repeatable measurements, correctness testing,
-and profiler-ready line information. It does not claim production deployment
-or Isaac Sim integration yet.
+This repository is an evidence artifact for robotics-perception roles that
+require CUDA, modern C++, ROS 2, and simulation/cloud awareness. It demonstrates
+custom kernels, atomics, explicit GPU memory management, RAII, CMake, repeatable
+measurements, correctness tests, a composable ROS 2 node, CI, profiler reports,
+and a cost-controlled AWS/Isaac Sim workflow. Cloud results are intentionally
+not claimed until an authenticated cloud run produces the JSON evidence.
+
+Non-positive and non-finite depth samples are converted to invalid XYZ points
+and excluded from voxel occupancy on both the CPU and CUDA paths.
 
 ## Requirements
 
@@ -32,6 +38,10 @@ cmake -S . -B build -G Ninja \
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+GitHub Actions performs a clean CUDA compilation and runs the CPU tests in an
+NVIDIA CUDA 12.8 build container. GPU correctness remains a local/self-hosted
+test because GitHub-hosted runners do not expose NVIDIA GPUs.
 
 ## Run the benchmark
 
@@ -90,6 +100,34 @@ Nsight Systems independently confirmed that device-to-host copies represented
 `results/depth_pipeline_timeline.nsys-rep` in Nsight Systems and
 `results/depth_to_pointcloud_baseline.ncu-rep` in Nsight Compute.
 
+### GPU-resident voxel pipeline
+
+The optimized path keeps XYZ data on the device, atomically elects one point
+per occupied 5 cm voxel, compacts those owners, and copies only the output
+count to the host. A 100-run 1080p session produced:
+
+| Path | Mean (ms) | P50 (ms) | P95 (ms) |
+|---|---:|---:|---:|
+| CPU projection | 4.2109 | 4.0293 | 5.7841 |
+| Pinned projection + full cloud readback | 2.7910 | 2.7573 | 2.8927 |
+| GPU projection + voxel compaction | 1.2963 | 1.2659 | 1.4277 |
+
+CPU and GPU both reported **7,385 occupied voxels**. The device-resident
+pipeline was **2.18x faster at p50** than the pinned path that copied the full
+cloud to the CPU. The exact measurements are preserved in
+`results/voxel_pipeline_rtx4050_1080p.csv`.
+
+Run a multi-session stability study and aggregate p50 variance with:
+
+```bash
+scripts/run_benchmark_trials.sh 10 30
+```
+
+The checked-in ten-session study measured a mean voxel-pipeline p50 of
+**1.3791 ms** (0.0483 ms standard deviation) versus **3.0100 ms** for pinned
+full-cloud readback. See `results/trials/summary.csv` and the ten raw trial
+files; these are separate sessions, not selected iterations from one run.
+
 ## Profile with Nsight Compute
 
 ```bash
@@ -108,15 +146,85 @@ The repository includes the baseline Nsight Compute report and the labeled
 Nsight Systems timeline. Pinned memory and asynchronous copies are implemented;
 use the reports to reproduce the measurements or evaluate later optimizations.
 
+## Compute Sanitizer
+
+```bash
+scripts/run_compute_sanitizer.sh
+```
+
+On Windows/WSL, NVIDIA requires a machine-wide WDDM debugger interface. This
+machine currently records that setup block honestly in
+`results/compute_sanitizer_memcheck.txt`; it is not a sanitizer pass. If you
+explicitly accept the security impact, open Administrator PowerShell, run
+`scripts/enable_wsl_compute_sanitizer.ps1 -IUnderstandSecurityRisk`, execute
+`wsl --shutdown`, reopen Ubuntu, and rerun the sanitizer. See NVIDIA's current
+[Compute Sanitizer documentation](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html).
+
+## ROS 2 composable component
+
+The optional component subscribes to a `32FC1` depth image on `/depth`, runs
+the pinned asynchronous CUDA projection, and publishes an organized
+`sensor_msgs/PointCloud2` on `/points`. A synthetic publisher supports a live
+smoke test without a camera or simulator.
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --cmake-args \
+  -DBUILD_ROS2_COMPONENT=ON \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.3/bin/nvcc
+source install/setup.bash
+
+# terminal 1
+ros2 run rclcpp_components component_container
+# terminal 2
+ros2 component load /ComponentManager cuda_depth_pointcloud_benchmark \
+  pointcloud::ros2::CudaDepthComponent
+# terminal 3
+ros2 run cuda_depth_pointcloud_benchmark synthetic_depth_publisher
+ros2 topic hz /points
+```
+
+After building with the `ros_build`/`ros_install` paths used in this repository,
+run the automated live check with `scripts/run_ros2_smoke_test.sh`. It launches
+the component container and synthetic publisher, requires an observed
+`PointCloud2` message, and saves the message/log evidence under `results/`.
+
+Camera intrinsics are ROS parameters (`fx`, `fy`, `cx`, `cy`). Zero/negative
+defaults derive a centered synthetic camera model from the input image.
+
+## Isaac Sim cloud workflow
+
+This laptop's RTX 4050 has 6 GB VRAM and the machine has 16 GB RAM, below Isaac
+Sim 6.0's current 16 GB VRAM and 32 GB RAM minimum. The `cloud/aws` Terraform
+configuration therefore targets a `g6.2xlarge` NVIDIA L4 instance, restricts
+all inbound access to one CIDR, uses encrypted disposable storage, and
+automatically terminates after 120 minutes. WebRTC ports are closed by default.
+
+The headless smoke test uses NVIDIA's current `nvcr.io/nvidia/isaac-sim:6.0.1`
+container and writes machine-readable timing evidence under `results/isaac/`:
+
+```bash
+export ACCEPT_NVIDIA_EULA=Y
+isaac/run_cloud_smoke_test.sh
+```
+
+Follow the [official Isaac Sim AWS deployment guide](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/install_advanced_cloud_setup_aws.html)
+for the Marketplace subscription/AMI. No instance has been launched from this
+repository because no authenticated AWS account, AMI subscription, key pair,
+or billing authorization is present.
+
 ## Evidence roadmap
 
 - [x] Enable GPU performance-counter access and preserve profiler reports.
 - [x] Add pinned memory, a non-blocking stream, and asynchronous copies.
-- [ ] Add GoogleTest cases for camera intrinsics and invalid-depth handling.
+- [x] Add CPU unit tests and CPU/GPU correctness tests.
+- [x] Add GPU-resident voxel filtering with a CPU validation reference.
+- [x] Add a ROS 2 C++ composable component and synthetic input publisher.
+- [x] Add CUDA build CI and an opt-in Compute Sanitizer workflow.
+- [x] Add cost-controlled AWS IaC and an Isaac Sim smoke-test harness.
 - [ ] Add a real RGB-D frame with documented provenance.
-- [ ] Integrate the projector as a ROS 2 C++ component.
 - [ ] Feed depth images from an Isaac Sim camera through the ROS 2 bridge.
-- [ ] Run randomized simulation trials and publish measured results.
+- [ ] Run authenticated Isaac Sim trials and publish measured results/costs.
 
 Do not place speedup numbers on a resume until they have been reproduced from
 a clean build and preserved in version-controlled results.
