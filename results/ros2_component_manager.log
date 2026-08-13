@@ -1,0 +1,3 @@
+[INFO] [1786664796.178017794] [cuda_component_manager]: Load Library: /mnt/c/Users/dewar/Documents/Codex/2026-08-13/can/outputs/cuda-depth-pointcloud-benchmark/ros_install/cuda_depth_pointcloud_benchmark/lib/libcuda_depth_component.so
+[INFO] [1786664796.190575303] [cuda_component_manager]: Found class: rclcpp_components::NodeFactoryTemplate<pointcloud::ros2::CudaDepthComponent>
+[INFO] [1786664796.191486896] [cuda_component_manager]: Instantiate class: rclcpp_components::NodeFactoryTemplate<pointcloud::ros2::CudaDepthComponent>

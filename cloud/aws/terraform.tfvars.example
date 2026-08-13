@@ -1,0 +1,7 @@
+region              = "us-east-1"
+ami_id              = "ami-REPLACE_WITH_SUBSCRIBED_NVIDIA_OR_GPU_AMI"
+key_name            = "REPLACE_WITH_EXISTING_EC2_KEY_PAIR"
+trusted_cidr        = "203.0.113.10/32"
+instance_type       = "g6.2xlarge"
+max_runtime_minutes = 120
+enable_livestream   = false

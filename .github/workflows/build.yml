@@ -1,0 +1,42 @@
+name: build-and-test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-format:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive cloud/aws
+      - name: Validate Terraform configuration
+        run: |
+          terraform -chdir=cloud/aws init -backend=false
+          terraform -chdir=cloud/aws validate
+
+  cuda-build-cpu-tests:
+    runs-on: ubuntu-22.04
+    container: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential cmake ninja-build
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
+      - name: Build CUDA and C++ targets
+        run: cmake --build build --parallel
+      - name: Run CPU unit tests
+        run: ctest --test-dir build -R cpu_unit_tests --output-on-failure

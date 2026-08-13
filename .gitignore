@@ -1,2 +1,10 @@
 /build/
+/ros_build/
+/ros_install/
+/ros_log/
 /results/*.sqlite
+/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

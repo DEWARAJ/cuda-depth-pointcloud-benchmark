@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cuda_depth_pointcloud_benchmark</name>
+  <version>0.2.0</version>
+  <description>CUDA depth projection and GPU-resident voxel filtering as a ROS 2 component.</description>
+  <maintainer email="DEWARAJ@users.noreply.github.com">Dewaraj Raparthi</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
