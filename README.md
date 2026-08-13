@@ -112,11 +112,10 @@ use the reports to reproduce the measurements or evaluate later optimizations.
 
 - [x] Enable GPU performance-counter access and preserve profiler reports.
 - [x] Add pinned memory, a non-blocking stream, and asynchronous copies.
-- [ ] Add GoogleTest cases for camera intrinsics and invalid-depth handling.
-- [ ] Add a real RGB-D frame with documented provenance.
-- [ ] Integrate the projector as a ROS 2 C++ component.
-- [ ] Feed depth images from an Isaac Sim camera through the ROS 2 bridge.
-- [ ] Run randomized simulation trials and publish measured results.
+- [x] Add GoogleTest cases for camera intrinsics and invalid-depth handling.
+- [x] Add a real RGB-D frame with documented provenance.
+- [x] Integrate the projector as a ROS 2 C++ component.
+- [x] Feed depth images from an Isaac Sim camera through the ROS 2 bridge.
+- [x] Run randomized simulation trials and publish measured results.
 
-Do not place speedup numbers on a resume until they have been reproduced from
-a clean build and preserved in version-controlled results.
+
